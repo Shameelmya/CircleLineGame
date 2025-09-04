@@ -43,11 +43,13 @@
                         userId = user.uid;
                         console.log("User signed in with ID:", userId);
                         isAuthReady = true;
+                        // Now that auth is ready, we can initialize the game logic
                         initGame();
                     } else {
                         userId = null;
                         isAuthReady = true;
                         console.log("No user signed in.");
+                        // Even without a user, we can still initialize the game to show the name modal
                         initGame();
                     }
                 });
@@ -97,8 +99,10 @@
                 document.getElementById('game-container').classList.add('hidden');
                 document.getElementById('name-modal').classList.remove('hidden');
             }
-
-            // Listen for changes to the game state
+        }
+        
+        // New function to set up the Firestore listener once a game ID is available
+        function setupGameListener() {
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), async (docSnap) => {
                 if (docSnap.exists()) {
                     const gameState = docSnap.data();
@@ -187,6 +191,7 @@
             }
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('game-container').classList.remove('hidden');
+            setupGameListener(); // Call the listener setup after the game ID is confirmed
         }
         
         document.getElementById('name-form').addEventListener('submit', (e) => {
