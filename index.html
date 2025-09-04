@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle Connection</title>
+    <title>Circle Line Game</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -96,68 +96,74 @@
                 document.getElementById('name-modal').classList.remove('hidden');
             } else {
                 // If no gameId, hide the game and show the name modal to create a new game
+                currentGameId = `circle-connection-${appId}-${Date.now()}`;
                 document.getElementById('game-container').classList.add('hidden');
                 document.getElementById('name-modal').classList.remove('hidden');
             }
+            setupGameListener();
         }
         
         // New function to set up the Firestore listener once a game ID is available
         function setupGameListener() {
             onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), async (docSnap) => {
-                if (docSnap.exists()) {
-                    const gameState = docSnap.data();
-                    
-                    // Assign players based on ID once two players have joined
-                    if (gameState.player1Id && gameState.player2Id && gameState.playerTurn === null) {
-                        let player1Name = gameState.player1Name || 'Player 1';
-                        let player2Name = gameState.player2Name || 'Player 2';
-                        let firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player1Id : gameState.player2Id;
-                        if (Math.random() < 0.5) {
-                            firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player2Id : gameState.player1Id;
-                        }
-                        
-                        await updateDoc(gameRef(), {
-                            playerTurn: (firstTurnId === gameState.player1Id) ? 'player1' : 'player2'
-                        });
-                        console.log("Initial turn assigned.");
-                    }
-        
-                    if (typeof gameState.circles === 'string') {
-                        gameState.circles = JSON.parse(gameState.circles);
-                    }
-                    renderGame(gameState);
+                const gameState = docSnap.data();
+                if (!gameState) {
+                    console.log("No game state found, waiting for player 1 to create it.");
+                    return;
                 }
+                
+                // Assign players if both a player 1 and player 2 are present
+                if (gameState.player1Id && gameState.player2Id && gameState.playerTurn === null) {
+                    let firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player1Id : gameState.player2Id;
+                    if (Math.random() < 0.5) {
+                        firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player2Id : gameState.player1Id;
+                    }
+                    
+                    await updateDoc(gameRef(), {
+                        playerTurn: (firstTurnId === gameState.player1Id) ? 'player1' : 'player2'
+                    });
+                    console.log("Initial turn assigned.");
+                }
+    
+                if (typeof gameState.circles === 'string') {
+                    gameState.circles = JSON.parse(gameState.circles);
+                }
+                renderGame(gameState);
             });
         }
         
-        async function joinGame(name) {
-            let docSnap;
-            let initialState = {};
-
-            if (currentGameId) {
-                docSnap = await getDoc(gameRef());
-            }
-
-            if (docSnap && docSnap.exists()) {
-                initialState = docSnap.data();
+        async function joinGame(playerNumber) {
+            let docSnap = await getDoc(gameRef());
+            let initialState = docSnap.exists() ? docSnap.data() : null;
+            let myRole = `player${playerNumber}`;
+        
+            if (initialState) {
                 if (initialState.player1Id === userId || initialState.player2Id === userId) {
-                    // This user has already joined, just update their name
-                    if (initialState.player1Id === userId) {
-                        await updateDoc(gameRef(), { player1Name: name });
-                    } else if (initialState.player2Id === userId) {
-                        await updateDoc(gameRef(), { player2Name: name });
-                    }
-                } else if (!initialState.player1Id) {
-                    await updateDoc(gameRef(), { player1Id: userId, player1Name: name });
-                } else if (!initialState.player2Id) {
-                    await updateDoc(gameRef(), { player2Id: userId, player2Name: name });
-                } else {
-                    showMessage("The game is full. You are a spectator.", 'red');
+                    showMessage(`You are already in this game.`, 'yellow');
+                    // Just update the UI if the user re-clicks their role
+                    document.getElementById('name-modal').classList.add('hidden');
+                    document.getElementById('game-container').classList.remove('hidden');
                     return;
                 }
+                
+                if (playerNumber === 1 && initialState.player1Id) {
+                    showMessage("Player 1 is already taken. Try Player 2.", 'red');
+                    return;
+                }
+                
+                if (playerNumber === 2 && initialState.player2Id) {
+                    showMessage("Player 2 is already taken. Try Player 1.", 'red');
+                    return;
+                }
+                
+                if (playerNumber === 1) {
+                    await updateDoc(gameRef(), { player1Id: userId });
+                } else if (playerNumber === 2) {
+                    await updateDoc(gameRef(), { player2Id: userId });
+                }
+        
             } else {
                 // Initialize a new game
-                currentGameId = `circle-connection-${appId}-${Date.now()}`;
                 let circles = [];
                 let count = 0;
                 for (let i = rows - 1; i >= 0; i--) {
@@ -176,41 +182,23 @@
                     circles: JSON.stringify(circles),
                     scores: { player1: 0, player2: 0 },
                     playerTurn: null, // Set to null initially
-                    player1Id: userId,
-                    player2Id: null,
-                    player1Name: name,
-                    player2Name: null,
+                    player1Id: playerNumber === 1 ? userId : null,
+                    player2Id: playerNumber === 2 ? userId : null,
                     lines: []
                 };
                 try {
                     await setDoc(gameRef(), newGameState);
-                    console.log("New game initialized by:", name);
+                    console.log("New game initialized.");
                 } catch (e) {
                     console.error("Error setting initial game state:", e);
                 }
             }
             document.getElementById('name-modal').classList.add('hidden');
             document.getElementById('game-container').classList.remove('hidden');
-            setupGameListener(); // Call the listener setup after the game ID is confirmed
         }
         
-        document.getElementById('name-form').addEventListener('submit', (e) => {
-            e.preventDefault();
-            const nameInput = document.getElementById('name-input');
-            const name = nameInput.value.trim();
-            if (name) {
-                joinGame(name);
-            } else {
-                showMessage("Please enter your name.", 'red');
-            }
-        });
-
-        document.getElementById('copy-link-button').addEventListener('click', () => {
-            const linkInput = document.getElementById('share-link-input');
-            linkInput.select();
-            document.execCommand('copy');
-            showMessage("Game link copied to clipboard!", 'green');
-        });
+        document.getElementById('player1-button').addEventListener('click', () => joinGame(1));
+        document.getElementById('player2-button').addEventListener('click', () => joinGame(2));
         
         async function handleCircleClick(circleId, rowIdx, colIdx) {
             if (!userId) {
@@ -239,7 +227,7 @@
         
             // Check if it's my turn
             if (gameState.playerTurn !== myPlayerRole) {
-                showMessage(`It's not your turn! It's ${gameState.playerTurn === 'player1' ? (gameState.player1Name || 'Player 1') : (gameState.player2Name || 'Player 2')}'s turn.`, 'red');
+                showMessage(`It's not your turn!`, 'red');
                 return;
             }
         
@@ -458,13 +446,11 @@
             const scoreP1 = document.getElementById('score-player1');
             const scoreP2 = document.getElementById('score-player2');
             const userIdDisplay = document.getElementById('user-id-display');
-            const shareLinkContainer = document.getElementById('share-link-container');
-            const shareLinkInput = document.getElementById('share-link-input');
             
             userIdDisplay.textContent = `Your ID: ${userId}`;
             
-            const player1Name = gameState.player1Name || 'Player 1';
-            const player2Name = gameState.player2Name || 'Player 2';
+            const player1Name = 'Player 1';
+            const player2Name = 'Player 2';
             
             playerColors.player1.name = player1Name;
             playerColors.player2.name = player2Name;
@@ -485,14 +471,6 @@
         
             scoreP1.textContent = `${player1Name}: ${gameState.scores.player1} points`;
             scoreP2.textContent = `${player2Name}: ${gameState.scores.player2} points`;
-
-            // Show or hide the share link button
-            if (gameState.player1Id === userId && !gameState.player2Id) {
-                shareLinkContainer.classList.remove('hidden');
-                shareLinkInput.value = `${window.location.origin}${window.location.pathname}?gameId=${currentGameId}`;
-            } else {
-                shareLinkContainer.classList.add('hidden');
-            }
         }
         
         function showMessage(message, color) {
@@ -577,8 +555,8 @@
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans p-4 sm:p-8 flex items-center justify-center min-h-screen">
-    <div class="max-w-4xl mx-auto flex flex-col items-center px-4 sm:px-8">
-        <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500 mb-4">Circle Connection</h1>
+    <div class="max-w-4xl mx-auto flex flex-col items-center px-8 sm:px-16">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500 mb-4">Circle Line Game</h1>
 
         <!-- User ID display -->
         <p id="user-id-display" class="text-xs mb-4 text-slate-400 text-center break-all"></p>
@@ -593,14 +571,6 @@
             <!-- Player Turn Display -->
             <div class="mb-6">
                 <p id="turn-text" class="text-lg font-bold"></p>
-            </div>
-
-            <!-- Share Link Container -->
-            <div id="share-link-container" class="flex items-center gap-2 mb-6 hidden">
-                <input id="share-link-input" type="text" readonly class="bg-slate-700 text-slate-100 p-2 rounded-md w-64 overflow-hidden overflow-ellipsis whitespace-nowrap">
-                <button id="copy-link-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
-                    Copy Link
-                </button>
             </div>
             
             <!-- Game Board -->
@@ -617,13 +587,16 @@
         <!-- Name Modal -->
         <div id="name-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center">
             <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
-                <h2 class="text-2xl font-bold mb-4">Enter Your Name</h2>
-                <form id="name-form" class="flex flex-col items-center">
-                    <input id="name-input" type="text" placeholder="Your Name" class="w-full p-2 rounded-md bg-slate-700 text-slate-100 placeholder-slate-400 mb-4 focus:outline-none focus:ring-2 focus:ring-pink-500">
-                    <button type="submit" class="w-full bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
-                        Join Game
+                <h2 class="text-2xl font-bold mb-4">Choose Your Player Number</h2>
+                <p class="text-sm text-slate-400 mb-6">If you created the game, choose Player 1. Otherwise, choose the available number.</p>
+                <div class="flex gap-4 justify-center">
+                    <button id="player1-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                        Player 1
                     </button>
-                </form>
+                    <button id="player2-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
+                        Player 2
+                    </button>
+                </div>
             </div>
         </div>
 
