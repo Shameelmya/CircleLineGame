@@ -8,8 +8,7 @@
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
         import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { getDatabase, ref, set, update, onValue, get } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-database.js";
         
         // DO NOT EDIT - These global variables are provided by the canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
@@ -23,13 +22,11 @@
         
         window.addEventListener('load', async () => {
             if (firebaseConfig.projectId) {
-                setLogLevel('debug');
                 app = initializeApp(firebaseConfig);
-                db = getFirestore(app);
+                db = getDatabase(app);
                 auth = getAuth(app);
         
                 // This listener is the single source of truth for the auth state.
-                // It will be called immediately with the current state and then on any change.
                 onAuthStateChanged(auth, async (user) => {
                     if (user) {
                         userId = user.uid;
@@ -65,71 +62,81 @@
             'player2': { line: 'purple', fill: 'bg-gray-400', name: '' }
         };
         
-        // Helper function to generate a random room code
-        function generateRoomCode() {
-            const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-            let result = '';
-            for (let i = 0; i < 5; i++) {
-                result += characters.charAt(Math.floor(Math.random() * characters.length));
-            }
-            return result;
-        }
-
-        const gameRef = (gameId) => doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
+        // Realtime Database reference
+        const gameRef = (gameId) => ref(db, `games/${gameId}`);
         
         function initGame() {
-            // Always show the name/room modal first
-            document.getElementById('game-container').classList.add('hidden');
-            document.getElementById('name-modal').classList.remove('hidden');
-            document.getElementById('auth-loading-message').classList.add('hidden');
+            // Get the room ID from the URL.
+            const urlParams = new URLSearchParams(window.location.search);
+            const roomCode = urlParams.get('gameId');
             
-            // Enable buttons after auth is complete
-            document.getElementById('create-room-button').disabled = false;
-            document.getElementById('join-room-button').disabled = false;
+            currentGameId = roomCode;
+            
+            // Now, we connect the player to the game with the given ID
+            connectToGame(currentGameId);
         }
 
-        // Sets up the Firestore listener and starts the game
-        function setupGameListener() {
-            onSnapshot(gameRef(currentGameId), async (docSnap) => {
-                const gameState = docSnap.data();
-                if (!gameState) {
-                    console.log("No game state found, waiting for player 1 to create it.");
-                    return;
-                }
-                
-                if (typeof gameState.circles === 'string') {
-                    gameState.circles = JSON.parse(gameState.circles);
-                }
-                renderGame(gameState);
-            });
-        }
-        
-        async function createRoom() {
-            const playerName = document.getElementById('player-name-input').value.trim();
-            if (!playerName) {
-                showMessage("Please enter your name.", 'red');
+        async function connectToGame(roomCode) {
+            if (!userId) {
+                // Wait for authentication to complete before trying to connect
+                setTimeout(() => connectToGame(roomCode), 500);
                 return;
             }
 
-            const roomCode = generateRoomCode();
-            currentGameId = roomCode;
+            // If no room code in URL, create one
+            if (!roomCode) {
+                const newRoomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
+                currentGameId = newRoomCode;
+                await createGame(newRoomCode);
+                document.getElementById('name-modal').classList.add('hidden');
+                document.getElementById('game-container').classList.remove('hidden');
+                setupGameListener();
+                return;
+            }
+            
+            try {
+                // Check if the game room already exists
+                const snapshot = await get(gameRef(roomCode));
+                const gameState = snapshot.val();
+                
+                if (!gameState) {
+                    // The room does not exist, so this user is Player 1 and creates it.
+                    await createGame(roomCode);
+                } else if (!gameState.player2Id) {
+                    // The room exists but Player 2 is missing, so this user joins.
+                    await joinGame(roomCode);
+                } else if (gameState.player1Id === userId || gameState.player2Id === userId) {
+                    // The room is full, but this user is already in it.
+                    showMessage("You are already in this game. Resuming your session.", 'yellow');
+                } else {
+                    // The room is full and this user is a new spectator.
+                    showMessage("This room is already full. You are a spectator.", 'red');
+                }
 
+                // Once the role is determined, hide the modal and start the game listener.
+                document.getElementById('name-modal').classList.add('hidden');
+                document.getElementById('game-container').classList.remove('hidden');
+                setupGameListener();
+            } catch (e) {
+                console.error("Connection Error:", e);
+                showMessage("Failed to connect to the game. Please check your internet connection and try again.", 'red');
+            }
+        }
+
+        async function createGame(roomCode) {
+            const playerName = document.getElementById('player-name-input').value.trim() || "Player 1";
             let circles = [];
             let count = 0;
             for (let i = rows - 1; i >= 0; i--) {
                 const row = [];
                 for (let j = 0; j <= i; j++) {
-                    row.push({
-                        filled: false,
-                        filledBy: null,
-                        id: `circle-${count++}`
-                    });
+                    row.push({ filled: false, filledBy: null, id: `circle-${count++}` });
                 }
                 circles.push(row);
             }
 
             const newGameState = {
-                circles: JSON.stringify(circles),
+                circles: circles,
                 scores: { player1: 0, player2: 0 },
                 playerTurn: null,
                 player1Id: userId,
@@ -138,75 +145,59 @@
                 player2Name: null,
                 lines: []
             };
+
             try {
-                await setDoc(gameRef(currentGameId), newGameState);
+                await set(gameRef(roomCode), newGameState);
                 console.log(`New game created with room code: ${roomCode}`);
-                document.getElementById('name-modal').classList.add('hidden');
-                document.getElementById('game-container').classList.remove('hidden');
-                setupGameListener();
-                showMessage(`Room created! Share this code with a friend: ${roomCode}`, 'green');
+                showMessage(`You are Player 1. Share this link with a friend!`, 'green');
             } catch (e) {
-                console.error("Error setting initial game state:", e);
-                showMessage("Failed to create room. Please try again.", 'red');
+                console.error("Create Game Error:", e);
+                showMessage("Failed to create the game. Please try again.", 'red');
             }
         }
 
-        async function joinRoom() {
-            const playerName = document.getElementById('player-name-input').value.trim();
-            const roomCode = document.getElementById('room-code-input').value.trim().toUpperCase();
-            if (!playerName || !roomCode) {
-                showMessage("Please enter your name and a room code.", 'red');
-                return;
-            }
-
-            currentGameId = roomCode;
-            const docSnap = await getDoc(gameRef(currentGameId));
-
-            if (!docSnap.exists()) {
-                showMessage("Room not found.", 'red');
-                return;
-            }
-
-            const gameState = docSnap.data();
-
-            // Check if the current user is already in the game
-            if (gameState.player1Id === userId || gameState.player2Id === userId) {
-                showMessage("You are already in this game. Resuming your session.", 'yellow');
-                document.getElementById('name-modal').classList.add('hidden');
-                document.getElementById('game-container').classList.remove('hidden');
-                setupGameListener();
-                return;
-            }
-
-            // Check if the room is already full
-            if (gameState.player2Id) {
-                showMessage("This room is already full.", 'red');
-                return;
-            }
-
+        async function joinGame(roomCode) {
+            const playerName = document.getElementById('player-name-input').value.trim() || "Player 2";
             try {
-                await updateDoc(gameRef(currentGameId), {
+                await update(gameRef(roomCode), {
                     player2Id: userId,
                     player2Name: playerName,
+                    playerTurn: Math.random() < 0.5 ? 'player1' : 'player2'
                 });
                 console.log(`Joined room ${roomCode} as Player 2.`);
-                
-                // As the second player, we can now assign the initial turn.
-                // This is a more deterministic way to start the game.
-                const turn = Math.random() < 0.5 ? 'player1' : 'player2';
-                await updateDoc(gameRef(currentGameId), { playerTurn: turn });
-                
-                document.getElementById('name-modal').classList.add('hidden');
-                document.getElementById('game-container').classList.remove('hidden');
-                setupGameListener();
+                showMessage(`You are Player 2. The game has started!`, 'green');
             } catch (e) {
-                console.error("Error joining room:", e);
-                showMessage("Failed to join room. Please try again.", 'red');
+                console.error("Join Game Error:", e);
+                showMessage("Failed to join the game. Please try again.", 'red');
             }
         }
         
-        document.getElementById('create-room-button').addEventListener('click', createRoom);
-        document.getElementById('join-room-button').addEventListener('click', joinRoom);
+        // Sets up the Realtime Database listener and starts the game
+        function setupGameListener() {
+            onValue(gameRef(currentGameId), (snapshot) => {
+                const gameState = snapshot.val();
+                if (!gameState) {
+                    console.log("No game state found, waiting for player 1 to create it.");
+                    return;
+                }
+                
+                // Firestore stored as string, Realtime DB does not, so check for string
+                if (typeof gameState.circles === 'string') {
+                    try {
+                        gameState.circles = JSON.parse(gameState.circles);
+                    } catch (e) {
+                        console.error("Error parsing circles data:", e);
+                        return;
+                    }
+                }
+
+                renderGame(gameState);
+            }, (error) => {
+                // Listen for errors in the onValue listener itself
+                console.error("Realtime Database Listener Error:", error);
+                showMessage("A connection error occurred. The game state may be out of sync.", 'red');
+            });
+        }
         
         async function handleCircleClick(circleId, rowIdx, colIdx) {
             if (!userId) {
@@ -214,62 +205,69 @@
                 return;
             }
         
-            const docSnap = await getDoc(gameRef(currentGameId));
-            if (!docSnap.exists()) return;
-        
-            const gameState = docSnap.data();
-            if (typeof gameState.circles === 'string') {
-                gameState.circles = JSON.parse(gameState.circles);
-            }
-            
-            // Determine my player role
-            let myPlayerRole = null;
-            if (gameState.player1Id === userId) {
-                myPlayerRole = 'player1';
-            } else if (gameState.player2Id === userId) {
-                myPlayerRole = 'player2';
-            } else {
-                showMessage("The game is full. You are a spectator.", 'red');
-                return;
-            }
-        
-            // Check if it's my turn
-            if (gameState.playerTurn !== myPlayerRole) {
-                showMessage(`It's not your turn!`, 'red');
-                return;
-            }
-        
-            // Check if the circle is already filled
-            const circle = gameState.circles[rowIdx][colIdx];
-            if (circle.filled) {
-                showMessage("This circle is already filled.", 'red');
-                return;
-            }
-            
-            // Update the circle's state
-            gameState.circles[rowIdx][colIdx].filled = true;
-            gameState.circles[rowIdx][colIdx].filledBy = myPlayerRole;
-        
-            // Check for completed lines
-            let newLines = checkLines(gameState.circles, gameState.lines);
-            
-            // Apply new lines and update scores
-            if (newLines.length > 0) {
-                newLines.forEach(line => {
-                    gameState.scores[myPlayerRole] += line.points;
-                    gameState.lines.push({ type: line.type, points: line.points, player: myPlayerRole });
-                });
-                showMessage(`Player ${myPlayerRole.slice(-1)} connected a line and got ${newLines[0].points} points! You get another turn.`, 'green');
-            } else {
-                // Change turn only if no line was connected
-                gameState.playerTurn = gameState.playerTurn === 'player1' ? 'player2' : 'player1';
-            }
-        
-            // Save the updated state to Firestore
             try {
-                await setDoc(gameRef(currentGameId), { ...gameState, circles: JSON.stringify(gameState.circles) });
+                const snapshot = await get(gameRef(currentGameId));
+                const gameState = snapshot.val();
+                if (!gameState) return;
+            
+                // Determine my player role
+                let myPlayerRole = null;
+                if (gameState.player1Id === userId) {
+                    myPlayerRole = 'player1';
+                } else if (gameState.player2Id === userId) {
+                    myPlayerRole = 'player2';
+                } else {
+                    showMessage("The game is full. You are a spectator.", 'red');
+                    return;
+                }
+            
+                // Check if it's my turn
+                if (gameState.playerTurn !== myPlayerRole) {
+                    showMessage(`It's not your turn!`, 'red');
+                    return;
+                }
+            
+                // Check if the circles data is a string (from a previous session)
+                if (typeof gameState.circles === 'string') {
+                    try {
+                        gameState.circles = JSON.parse(gameState.circles);
+                    } catch (e) {
+                        console.error("Error parsing circles data:", e);
+                        return;
+                    }
+                }
+                
+                // Check if the circle is already filled
+                const circle = gameState.circles[rowIdx][colIdx];
+                if (circle.filled) {
+                    showMessage("This circle is already filled.", 'red');
+                    return;
+                }
+                
+                // Update the circle's state
+                gameState.circles[rowIdx][colIdx].filled = true;
+                gameState.circles[rowIdx][colIdx].filledBy = myPlayerRole;
+            
+                // Check for completed lines
+                let newLines = checkLines(gameState.circles, gameState.lines);
+                
+                // Apply new lines and update scores
+                if (newLines.length > 0) {
+                    newLines.forEach(line => {
+                        gameState.scores[myPlayerRole] += line.points;
+                        gameState.lines.push({ type: line.type, points: line.points, player: myPlayerRole });
+                    });
+                    showMessage(`Player ${myPlayerRole.slice(-1)} connected a line and got ${newLines[0].points} points! You get another turn.`, 'green');
+                } else {
+                    // Change turn only if no line was connected
+                    gameState.playerTurn = gameState.playerTurn === 'player1' ? 'player2' : 'player1';
+                }
+            
+                // Save the updated state to Realtime Database
+                await set(gameRef(currentGameId), gameState);
             } catch (e) {
-                console.error("Error updating game state:", e);
+                console.error("Game Play Error:", e);
+                showMessage("Failed to make a move. Please try again.", 'red');
             }
         }
         
@@ -288,7 +286,6 @@
         
             // Diagonal Right lines
             for (let i = 0; i < circles.length; i++) {
-                let diagonalRight = [];
                 for (let j = 0; j < circles[i].length; j++) {
                     if (circles[i][j]) {
                          let row = i;
@@ -311,7 +308,6 @@
         
             // Diagonal Left lines
             for (let i = 0; i < circles.length; i++) {
-                let diagonalLeft = [];
                 for (let j = 0; j < circles[i].length; j++) {
                     if (circles[i][j]) {
                          let row = i;
@@ -501,47 +497,48 @@
                 showMessage("Please wait for authentication to complete.", 'yellow');
                 return;
             }
-            const docSnap = await getDoc(gameRef(currentGameId));
-            if (docSnap.exists()) {
-                const gameState = docSnap.data();
-                if (gameState.player1Id !== userId) {
-                    showMessage("Only the room creator can reset the game.", 'red');
-                    return;
-                }
-            }
-        
-            let circles = [];
-            let count = 0;
-            // The row generation has been inverted to create a triangle pointing up
-            for (let i = rows - 1; i >= 0; i--) {
-                const row = [];
-                for (let j = 0; j <= i; j++) {
-                    row.push({
-                        filled: false,
-                        filledBy: null,
-                        id: `circle-${count++}`
-                    });
-                }
-                circles.push(row);
-            }
-        
-            const newGameState = {
-                circles: JSON.stringify(circles),
-                scores: { player1: 0, player2: 0 },
-                playerTurn: null,
-                player1Id: userId,
-                player2Id: null,
-                player1Name: gameState.player1Name,
-                player2Name: null,
-                lines: []
-            };
-        
             try {
-                await setDoc(gameRef(currentGameId), newGameState);
+                const snapshot = await get(gameRef(currentGameId));
+                const gameState = snapshot.val();
+                if (gameState) {
+                    if (gameState.player1Id !== userId) {
+                        showMessage("Only the room creator can reset the game.", 'red');
+                        return;
+                    }
+                }
+            
+                let circles = [];
+                let count = 0;
+                // The row generation has been inverted to create a triangle pointing up
+                for (let i = rows - 1; i >= 0; i--) {
+                    const row = [];
+                    for (let j = 0; j <= i; j++) {
+                        row.push({
+                            filled: false,
+                            filledBy: null,
+                            id: `circle-${count++}`
+                        });
+                    }
+                    circles.push(row);
+                }
+            
+                const newGameState = {
+                    circles: circles,
+                    scores: { player1: 0, player2: 0 },
+                    playerTurn: null,
+                    player1Id: userId,
+                    player2Id: null,
+                    player1Name: gameState.player1Name,
+                    player2Name: null,
+                    lines: []
+                };
+            
+                await set(gameRef(currentGameId), newGameState);
                 console.log("Game reset by Player 1.");
                 showMessage("Game has been reset!", 'green');
             } catch (e) {
-                console.error("Error resetting game state:", e);
+                console.error("Reset Game Error:", e);
+                showMessage("Failed to reset the game. Please try again.", 'red');
             }
         }
         
@@ -597,7 +594,7 @@
                 <h2 class="text-2xl font-bold mb-4">Play Online</h2>
                 <p id="auth-loading-message" class="text-sm text-slate-400 mb-6">Connecting to Firebase...</p>
                 <input type="text" id="player-name-input" placeholder="Enter your name" class="w-full p-2 mb-4 rounded bg-slate-700 text-slate-200 border border-slate-600">
-                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                <div class="flex flex-col sm:flex-row gap-4 justify-center hidden">
                     <button id="create-room-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors disabled:opacity-50" disabled>
                         Create Room
                     </button>
