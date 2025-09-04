@@ -71,15 +71,12 @@
             const roomCode = urlParams.get('gameId');
             
             currentGameId = roomCode;
-            
-            // Now, we connect the player to the game with the given ID
-            connectToGame(currentGameId);
         }
 
-        async function connectToGame(roomCode) {
+        async function connectToGame(roomCode, playerName) {
             if (!userId) {
                 // Wait for authentication to complete before trying to connect
-                setTimeout(() => connectToGame(roomCode), 500);
+                setTimeout(() => connectToGame(roomCode, playerName), 500);
                 return;
             }
 
@@ -87,7 +84,7 @@
             if (!roomCode) {
                 const newRoomCode = Math.random().toString(36).substring(2, 7).toUpperCase();
                 currentGameId = newRoomCode;
-                await createGame(newRoomCode);
+                await createGame(newRoomCode, playerName);
                 document.getElementById('name-modal').classList.add('hidden');
                 document.getElementById('game-container').classList.remove('hidden');
                 setupGameListener();
@@ -101,10 +98,10 @@
                 
                 if (!gameState) {
                     // The room does not exist, so this user is Player 1 and creates it.
-                    await createGame(roomCode);
+                    await createGame(roomCode, playerName);
                 } else if (!gameState.player2Id) {
                     // The room exists but Player 2 is missing, so this user joins.
-                    await joinGame(roomCode);
+                    await joinGame(roomCode, playerName);
                 } else if (gameState.player1Id === userId || gameState.player2Id === userId) {
                     // The room is full, but this user is already in it.
                     showMessage("You are already in this game. Resuming your session.", 'yellow');
@@ -123,8 +120,8 @@
             }
         }
 
-        async function createGame(roomCode) {
-            const playerName = document.getElementById('player-name-input').value.trim() || "Player 1";
+        async function createGame(roomCode, playerName) {
+            const finalName = playerName.trim() || "Player 1";
             let circles = [];
             let count = 0;
             for (let i = rows - 1; i >= 0; i--) {
@@ -141,7 +138,7 @@
                 playerTurn: null,
                 player1Id: userId,
                 player2Id: null,
-                player1Name: playerName,
+                player1Name: finalName,
                 player2Name: null,
                 lines: []
             };
@@ -156,12 +153,12 @@
             }
         }
 
-        async function joinGame(roomCode) {
-            const playerName = document.getElementById('player-name-input').value.trim() || "Player 2";
+        async function joinGame(roomCode, playerName) {
+            const finalName = playerName.trim() || "Player 2";
             try {
                 await update(gameRef(roomCode), {
                     player2Id: userId,
-                    player2Name: playerName,
+                    player2Name: finalName,
                     playerTurn: Math.random() < 0.5 ? 'player1' : 'player2'
                 });
                 console.log(`Joined room ${roomCode} as Player 2.`);
@@ -198,6 +195,15 @@
                 showMessage("A connection error occurred. The game state may be out of sync.", 'red');
             });
         }
+
+        document.getElementById('start-game-button').addEventListener('click', () => {
+            const playerName = document.getElementById('player-name-input').value;
+            if (playerName.trim() === '') {
+                showMessage("Please enter your name.", 'red');
+                return;
+            }
+            connectToGame(currentGameId, playerName);
+        });
         
         async function handleCircleClick(circleId, rowIdx, colIdx) {
             if (!userId) {
@@ -594,15 +600,9 @@
                 <h2 class="text-2xl font-bold mb-4">Play Online</h2>
                 <p id="auth-loading-message" class="text-sm text-slate-400 mb-6">Connecting to Firebase...</p>
                 <input type="text" id="player-name-input" placeholder="Enter your name" class="w-full p-2 mb-4 rounded bg-slate-700 text-slate-200 border border-slate-600">
-                <div class="flex flex-col sm:flex-row gap-4 justify-center hidden">
-                    <button id="create-room-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors disabled:opacity-50" disabled>
-                        Create Room
-                    </button>
-                    <input type="text" id="room-code-input" placeholder="Enter room code" class="w-full sm:w-1/2 p-2 rounded bg-slate-700 text-slate-200 border border-slate-600 uppercase">
-                    <button id="join-room-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors disabled:opacity-50" disabled>
-                        Join Room
-                    </button>
-                </div>
+                <button id="start-game-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
+                    Start Game
+                </button>
             </div>
         </div>
 
