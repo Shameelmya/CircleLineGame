@@ -49,7 +49,6 @@
                         userId = null;
                         isAuthReady = true;
                         console.log("No user signed in.");
-                        // Even without a user, we can still initialize the game to show the name modal
                         initGame();
                     }
                 });
@@ -76,8 +75,18 @@
             'player1': { line: 'pink', fill: 'bg-gray-400', name: '' },
             'player2': { line: 'purple', fill: 'bg-gray-400', name: '' }
         };
+        
+        // Helper function to generate a random room code
+        function generateRoomCode() {
+            const characters = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+            let result = '';
+            for (let i = 0; i < 5; i++) {
+                result += characters.charAt(Math.floor(Math.random() * characters.length));
+            }
+            return result;
+        }
 
-        const gameRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId);
+        const gameRef = (gameId) => doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
         
         function initGame() {
             if (!isAuthReady) {
@@ -86,41 +95,24 @@
                 return;
             }
             
-            // Check for a gameId in the URL to join an existing game
-            const urlParams = new URLSearchParams(window.location.search);
-            const gameIdFromUrl = urlParams.get('gameId');
-
-            if (gameIdFromUrl) {
-                currentGameId = gameIdFromUrl;
-                document.getElementById('game-container').classList.add('hidden');
-                document.getElementById('name-modal').classList.remove('hidden');
-            } else {
-                // If no gameId, hide the game and show the name modal to create a new game
-                currentGameId = `circle-connection-${appId}-${Date.now()}`;
-                document.getElementById('game-container').classList.add('hidden');
-                document.getElementById('name-modal').classList.remove('hidden');
-            }
-            setupGameListener();
+            // Always show the name/room modal first
+            document.getElementById('game-container').classList.add('hidden');
+            document.getElementById('name-modal').classList.remove('hidden');
         }
-        
-        // New function to set up the Firestore listener once a game ID is available
+
+        // Sets up the Firestore listener and starts the game
         function setupGameListener() {
-            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), async (docSnap) => {
+            onSnapshot(gameRef(currentGameId), async (docSnap) => {
                 const gameState = docSnap.data();
                 if (!gameState) {
                     console.log("No game state found, waiting for player 1 to create it.");
                     return;
                 }
                 
-                // Assign players if both a player 1 and player 2 are present
+                // Assign a turn if both players are present
                 if (gameState.player1Id && gameState.player2Id && gameState.playerTurn === null) {
-                    let firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player1Id : gameState.player2Id;
-                    if (Math.random() < 0.5) {
-                        firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player2Id : gameState.player1Id;
-                    }
-                    
-                    await updateDoc(gameRef(), {
-                        playerTurn: (firstTurnId === gameState.player1Id) ? 'player1' : 'player2'
+                    await updateDoc(gameRef(currentGameId), {
+                        playerTurn: Math.random() < 0.5 ? 'player1' : 'player2'
                     });
                     console.log("Initial turn assigned.");
                 }
@@ -132,73 +124,100 @@
             });
         }
         
-        async function joinGame(playerNumber) {
-            let docSnap = await getDoc(gameRef());
-            let initialState = docSnap.exists() ? docSnap.data() : null;
-            let myRole = `player${playerNumber}`;
-        
-            if (initialState) {
-                if (initialState.player1Id === userId || initialState.player2Id === userId) {
-                    showMessage(`You are already in this game.`, 'yellow');
-                    // Just update the UI if the user re-clicks their role
-                    document.getElementById('name-modal').classList.add('hidden');
-                    document.getElementById('game-container').classList.remove('hidden');
-                    return;
-                }
-                
-                if (playerNumber === 1 && initialState.player1Id) {
-                    showMessage("Player 1 is already taken. Try Player 2.", 'red');
-                    return;
-                }
-                
-                if (playerNumber === 2 && initialState.player2Id) {
-                    showMessage("Player 2 is already taken. Try Player 1.", 'red');
-                    return;
-                }
-                
-                if (playerNumber === 1) {
-                    await updateDoc(gameRef(), { player1Id: userId });
-                } else if (playerNumber === 2) {
-                    await updateDoc(gameRef(), { player2Id: userId });
-                }
-        
-            } else {
-                // Initialize a new game
-                let circles = [];
-                let count = 0;
-                for (let i = rows - 1; i >= 0; i--) {
-                    const row = [];
-                    for (let j = 0; j <= i; j++) {
-                        row.push({
-                            filled: false,
-                            filledBy: null,
-                            id: `circle-${count++}`
-                        });
-                    }
-                    circles.push(row);
-                }
-        
-                const newGameState = {
-                    circles: JSON.stringify(circles),
-                    scores: { player1: 0, player2: 0 },
-                    playerTurn: null, // Set to null initially
-                    player1Id: playerNumber === 1 ? userId : null,
-                    player2Id: playerNumber === 2 ? userId : null,
-                    lines: []
-                };
-                try {
-                    await setDoc(gameRef(), newGameState);
-                    console.log("New game initialized.");
-                } catch (e) {
-                    console.error("Error setting initial game state:", e);
-                }
+        async function createRoom() {
+            const playerName = document.getElementById('player-name-input').value.trim();
+            if (!playerName) {
+                showMessage("Please enter your name.", 'red');
+                return;
             }
-            document.getElementById('name-modal').classList.add('hidden');
-            document.getElementById('game-container').classList.remove('hidden');
+
+            const roomCode = generateRoomCode();
+            currentGameId = roomCode;
+
+            let circles = [];
+            let count = 0;
+            for (let i = rows - 1; i >= 0; i--) {
+                const row = [];
+                for (let j = 0; j <= i; j++) {
+                    row.push({
+                        filled: false,
+                        filledBy: null,
+                        id: `circle-${count++}`
+                    });
+                }
+                circles.push(row);
+            }
+
+            const newGameState = {
+                circles: JSON.stringify(circles),
+                scores: { player1: 0, player2: 0 },
+                playerTurn: null,
+                player1Id: userId,
+                player2Id: null,
+                player1Name: playerName,
+                player2Name: null,
+                lines: []
+            };
+            try {
+                await setDoc(gameRef(currentGameId), newGameState);
+                console.log(`New game created with room code: ${roomCode}`);
+                document.getElementById('name-modal').classList.add('hidden');
+                document.getElementById('game-container').classList.remove('hidden');
+                setupGameListener();
+                showMessage(`Room created! Share this code with a friend: ${roomCode}`, 'green');
+            } catch (e) {
+                console.error("Error setting initial game state:", e);
+                showMessage("Failed to create room. Please try again.", 'red');
+            }
+        }
+
+        async function joinRoom() {
+            const playerName = document.getElementById('player-name-input').value.trim();
+            const roomCode = document.getElementById('room-code-input').value.trim().toUpperCase();
+            if (!playerName || !roomCode) {
+                showMessage("Please enter your name and a room code.", 'red');
+                return;
+            }
+
+            currentGameId = roomCode;
+            const docSnap = await getDoc(gameRef(currentGameId));
+
+            if (!docSnap.exists()) {
+                showMessage("Room not found.", 'red');
+                return;
+            }
+
+            const gameState = docSnap.data();
+            if (gameState.player1Id === userId || gameState.player2Id === userId) {
+                showMessage("You are already in this game.", 'yellow');
+                document.getElementById('name-modal').classList.add('hidden');
+                document.getElementById('game-container').classList.remove('hidden');
+                setupGameListener();
+                return;
+            }
+
+            if (gameState.player2Id) {
+                showMessage("This room is already full.", 'red');
+                return;
+            }
+
+            try {
+                await updateDoc(gameRef(currentGameId), {
+                    player2Id: userId,
+                    player2Name: playerName,
+                });
+                console.log(`Joined room ${roomCode} as Player 2.`);
+                document.getElementById('name-modal').classList.add('hidden');
+                document.getElementById('game-container').classList.remove('hidden');
+                setupGameListener();
+            } catch (e) {
+                console.error("Error joining room:", e);
+                showMessage("Failed to join room. Please try again.", 'red');
+            }
         }
         
-        document.getElementById('player1-button').addEventListener('click', () => joinGame(1));
-        document.getElementById('player2-button').addEventListener('click', () => joinGame(2));
+        document.getElementById('create-room-button').addEventListener('click', createRoom);
+        document.getElementById('join-room-button').addEventListener('click', joinRoom);
         
         async function handleCircleClick(circleId, rowIdx, colIdx) {
             if (!userId) {
@@ -206,7 +225,7 @@
                 return;
             }
         
-            const docSnap = await getDoc(gameRef());
+            const docSnap = await getDoc(gameRef(currentGameId));
             if (!docSnap.exists()) return;
         
             const gameState = docSnap.data();
@@ -259,7 +278,7 @@
         
             // Save the updated state to Firestore
             try {
-                await setDoc(gameRef(), { ...gameState, circles: JSON.stringify(gameState.circles) });
+                await setDoc(gameRef(currentGameId), { ...gameState, circles: JSON.stringify(gameState.circles) });
             } catch (e) {
                 console.error("Error updating game state:", e);
             }
@@ -447,10 +466,10 @@
             const scoreP2 = document.getElementById('score-player2');
             const userIdDisplay = document.getElementById('user-id-display');
             
-            userIdDisplay.textContent = `Your ID: ${userId}`;
+            userIdDisplay.textContent = `Room ID: ${currentGameId}`;
             
-            const player1Name = 'Player 1';
-            const player2Name = 'Player 2';
+            const player1Name = gameState.player1Name || 'Player 1';
+            const player2Name = gameState.player2Name || 'Player 2';
             
             playerColors.player1.name = player1Name;
             playerColors.player2.name = player2Name;
@@ -481,7 +500,7 @@
             messageDiv.classList.remove('hidden');
             setTimeout(() => {
                 messageDiv.classList.add('hidden');
-            }, 3000);
+            }, 5000);
         }
         
         document.getElementById('close-message').addEventListener('click', () => {
@@ -493,11 +512,11 @@
                 showMessage("Please wait for authentication to complete.", 'yellow');
                 return;
             }
-            const docSnap = await getDoc(gameRef());
+            const docSnap = await getDoc(gameRef(currentGameId));
             if (docSnap.exists()) {
                 const gameState = docSnap.data();
                 if (gameState.player1Id !== userId) {
-                    showMessage("Only Player 1 can reset the game.", 'red');
+                    showMessage("Only the room creator can reset the game.", 'red');
                     return;
                 }
             }
@@ -529,7 +548,7 @@
             };
         
             try {
-                await setDoc(gameRef(), newGameState);
+                await setDoc(gameRef(currentGameId), newGameState);
                 console.log("Game reset by Player 1.");
                 showMessage("Game has been reset!", 'green');
             } catch (e) {
@@ -538,7 +557,47 @@
         }
         
         document.getElementById('reset-button').addEventListener('click', resetGame);
+
+        // --- Confirmation Modal for Navigation ---
+        let startY = 0;
+        const confirmationModal = document.getElementById('confirmation-modal');
+
+        // Prevent pull-to-refresh on mobile
+        document.body.addEventListener('touchstart', (e) => {
+            startY = e.touches[0].pageY;
+        });
+
+        document.body.addEventListener('touchmove', (e) => {
+            const currentY = e.touches[0].pageY;
+            // Check if the user is dragging down near the top of the page
+            if (currentY > startY + 5 && window.scrollY === 0) {
+                e.preventDefault();
+                showConfirmationModal();
+            }
+        }, { passive: false }); // `passive: false` is required to call `preventDefault`
+
+        // Show confirmation on back button press
+        window.addEventListener('popstate', (e) => {
+            history.pushState(null, null, location.href);
+            showConfirmationModal();
+        });
+
+        function showConfirmationModal() {
+            if (currentGameId) {
+                confirmationModal.classList.remove('hidden');
+            }
+        }
         
+        document.getElementById('confirm-leave').addEventListener('click', () => {
+            // User confirms leaving, so allow navigation
+            history.back();
+        });
+        
+        document.getElementById('cancel-leave').addEventListener('click', () => {
+            // User cancels, hide the modal and stay on the page
+            confirmationModal.classList.add('hidden');
+        });
+
         </script>
     <style>
         body {
@@ -555,7 +614,7 @@
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans p-4 sm:p-8 flex items-center justify-center min-h-screen">
-    <div class="max-w-4xl mx-auto flex flex-col items-center px-8 sm:px-16">
+    <div class="max-w-4xl mx-auto flex flex-col items-center px-4 sm:px-8 md:px-12">
         <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500 mb-4">Circle Line Game</h1>
 
         <!-- User ID display -->
@@ -587,14 +646,16 @@
         <!-- Name Modal -->
         <div id="name-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center">
             <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
-                <h2 class="text-2xl font-bold mb-4">Choose Your Player Number</h2>
-                <p class="text-sm text-slate-400 mb-6">If you created the game, choose Player 1. Otherwise, choose the available number.</p>
-                <div class="flex gap-4 justify-center">
-                    <button id="player1-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
-                        Player 1
+                <h2 class="text-2xl font-bold mb-4">Play Online</h2>
+                <p class="text-sm text-slate-400 mb-6">Create a new room or join an existing one to play with a friend.</p>
+                <input type="text" id="player-name-input" placeholder="Enter your name" class="w-full p-2 mb-4 rounded bg-slate-700 text-slate-200 border border-slate-600">
+                <div class="flex flex-col sm:flex-row gap-4 justify-center">
+                    <button id="create-room-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                        Create Room
                     </button>
-                    <button id="player2-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
-                        Player 2
+                    <input type="text" id="room-code-input" placeholder="Enter room code" class="w-full sm:w-1/2 p-2 rounded bg-slate-700 text-slate-200 border border-slate-600 uppercase">
+                    <button id="join-room-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
+                        Join Room
                     </button>
                 </div>
             </div>
@@ -607,6 +668,22 @@
                 <button id="close-message" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
                     OK
                 </button>
+            </div>
+        </div>
+
+        <!-- Confirmation Modal for Back/Refresh -->
+        <div id="confirmation-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center hidden">
+            <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
+                <p class="text-xl font-semibold mb-4 text-slate-200">Are you sure you want to leave?</p>
+                <p class="text-sm text-slate-400 mb-6">You will lose your current game connection.</p>
+                <div class="flex justify-center gap-4">
+                    <button id="cancel-leave" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors w-full">
+                        Cancel
+                    </button>
+                    <button id="confirm-leave" class="bg-gray-500 text-white font-bold py-2 px-4 rounded-full hover:bg-gray-600 transition-colors w-full">
+                        Leave Game
+                    </button>
+                </div>
             </div>
         </div>
         
