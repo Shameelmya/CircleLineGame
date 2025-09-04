@@ -14,16 +14,7 @@
         // DO NOT EDIT - These global variables are provided by the canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
-        
-        // IMPORTANT: Paste your Firebase config object here for GitHub hosting!
-        const firebaseConfig = {
-            apiKey: "AIzaSyDC8lbHuH6sZla2JijW_HU7jcy-YfanUaw",
-            authDomain: "crcle-lne-gme.firebaseapp.com",
-            projectId: "crcle-lne-gme",
-            storageBucket: "crcle-lne-gme.firebasestorage.app",
-            messagingSenderId: "710733005551",
-            appId: "1:710733005551:web:3edd685a5622c6c4a0911a"
-        };
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         
         // Firebase initialization and authentication
         let app, db, auth;
@@ -31,7 +22,7 @@
         let currentGameId = null;
         
         window.addEventListener('load', async () => {
-            if (Object.keys(firebaseConfig).length > 0) {
+            if (firebaseConfig.projectId) {
                 setLogLevel('debug');
                 app = initializeApp(firebaseConfig);
                 db = getFirestore(app);
@@ -172,14 +163,17 @@
             }
 
             const gameState = docSnap.data();
+
+            // Check if the current user is already in the game
             if (gameState.player1Id === userId || gameState.player2Id === userId) {
-                showMessage("You are already in this game.", 'yellow');
+                showMessage("You are already in this game. Resuming your session.", 'yellow');
                 document.getElementById('name-modal').classList.add('hidden');
                 document.getElementById('game-container').classList.remove('hidden');
                 setupGameListener();
                 return;
             }
 
+            // Check if the room is already full
             if (gameState.player2Id) {
                 showMessage("This room is already full.", 'red');
                 return;
