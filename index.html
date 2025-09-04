@@ -81,6 +81,11 @@
             // Always show the name/room modal first
             document.getElementById('game-container').classList.add('hidden');
             document.getElementById('name-modal').classList.remove('hidden');
+            document.getElementById('auth-loading-message').classList.add('hidden');
+            
+            // Enable buttons after auth is complete
+            document.getElementById('create-room-button').disabled = false;
+            document.getElementById('join-room-button').disabled = false;
         }
 
         // Sets up the Firestore listener and starts the game
@@ -590,14 +595,14 @@
         <div id="name-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center">
             <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
                 <h2 class="text-2xl font-bold mb-4">Play Online</h2>
-                <p class="text-sm text-slate-400 mb-6">Create a new room or join an existing one to play with a friend.</p>
+                <p id="auth-loading-message" class="text-sm text-slate-400 mb-6">Connecting to Firebase...</p>
                 <input type="text" id="player-name-input" placeholder="Enter your name" class="w-full p-2 mb-4 rounded bg-slate-700 text-slate-200 border border-slate-600">
                 <div class="flex flex-col sm:flex-row gap-4 justify-center">
-                    <button id="create-room-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                    <button id="create-room-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors disabled:opacity-50" disabled>
                         Create Room
                     </button>
                     <input type="text" id="room-code-input" placeholder="Enter room code" class="w-full sm:w-1/2 p-2 rounded bg-slate-700 text-slate-200 border border-slate-600 uppercase">
-                    <button id="join-room-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
+                    <button id="join-room-button" class="bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors disabled:opacity-50" disabled>
                         Join Room
                     </button>
                 </div>
