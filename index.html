@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle Line Game</title>
+    <title>Circle Connection</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -29,6 +29,7 @@
         let app, db, auth;
         let userId = null;
         let isAuthReady = false;
+        let currentGameId = null;
         
         window.addEventListener('load', async () => {
             if (Object.keys(firebaseConfig).length > 0) {
@@ -73,8 +74,8 @@
             'player1': { line: 'pink', fill: 'bg-gray-400', name: '' },
             'player2': { line: 'purple', fill: 'bg-gray-400', name: '' }
         };
-        const gameId = `circle-connection-${appId}`;
-        const gameRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
+
+        const gameRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId);
         
         function initGame() {
             if (!isAuthReady) {
@@ -83,11 +84,22 @@
                 return;
             }
             
+            // Check for a gameId in the URL to join an existing game
+            const urlParams = new URLSearchParams(window.location.search);
+            const gameIdFromUrl = urlParams.get('gameId');
+
+            if (gameIdFromUrl) {
+                currentGameId = gameIdFromUrl;
+                document.getElementById('game-container').classList.add('hidden');
+                document.getElementById('name-modal').classList.remove('hidden');
+            } else {
+                // If no gameId, hide the game and show the name modal to create a new game
+                document.getElementById('game-container').classList.add('hidden');
+                document.getElementById('name-modal').classList.remove('hidden');
+            }
+
             // Listen for changes to the game state
-            onSnapshot(gameRef(), async (docSnap) => {
-                const gameContainer = document.getElementById('game-container');
-                const nameModal = document.getElementById('name-modal');
-        
+            onSnapshot(doc(db, 'artifacts', appId, 'public', 'data', 'games', currentGameId), async (docSnap) => {
                 if (docSnap.exists()) {
                     const gameState = docSnap.data();
                     
@@ -110,17 +122,19 @@
                         gameState.circles = JSON.parse(gameState.circles);
                     }
                     renderGame(gameState);
-                } else {
-                    gameContainer.classList.add('hidden');
-                    nameModal.classList.remove('hidden');
                 }
             });
         }
         
         async function joinGame(name) {
-            const docSnap = await getDoc(gameRef());
+            let docSnap;
             let initialState = {};
-            if (docSnap.exists()) {
+
+            if (currentGameId) {
+                docSnap = await getDoc(gameRef());
+            }
+
+            if (docSnap && docSnap.exists()) {
                 initialState = docSnap.data();
                 if (initialState.player1Id === userId || initialState.player2Id === userId) {
                     // This user has already joined, just update their name
@@ -139,6 +153,7 @@
                 }
             } else {
                 // Initialize a new game
+                currentGameId = `circle-connection-${appId}-${Date.now()}`;
                 let circles = [];
                 let count = 0;
                 for (let i = rows - 1; i >= 0; i--) {
@@ -183,6 +198,13 @@
             } else {
                 showMessage("Please enter your name.", 'red');
             }
+        });
+
+        document.getElementById('copy-link-button').addEventListener('click', () => {
+            const linkInput = document.getElementById('share-link-input');
+            linkInput.select();
+            document.execCommand('copy');
+            showMessage("Game link copied to clipboard!", 'green');
         });
         
         async function handleCircleClick(circleId, rowIdx, colIdx) {
@@ -431,6 +453,8 @@
             const scoreP1 = document.getElementById('score-player1');
             const scoreP2 = document.getElementById('score-player2');
             const userIdDisplay = document.getElementById('user-id-display');
+            const shareLinkContainer = document.getElementById('share-link-container');
+            const shareLinkInput = document.getElementById('share-link-input');
             
             userIdDisplay.textContent = `Your ID: ${userId}`;
             
@@ -456,6 +480,14 @@
         
             scoreP1.textContent = `${player1Name}: ${gameState.scores.player1} points`;
             scoreP2.textContent = `${player2Name}: ${gameState.scores.player2} points`;
+
+            // Show or hide the share link button
+            if (gameState.player1Id === userId && !gameState.player2Id) {
+                shareLinkContainer.classList.remove('hidden');
+                shareLinkInput.value = `${window.location.origin}${window.location.pathname}?gameId=${currentGameId}`;
+            } else {
+                shareLinkContainer.classList.add('hidden');
+            }
         }
         
         function showMessage(message, color) {
@@ -526,6 +558,11 @@
         
         </script>
     <style>
+        body {
+            /* Prevent scrolling on mobile devices */
+            overflow: hidden;
+        }
+
         .circle-container {
             position: relative;
             /* Adjust height to fit the inverted triangle */
@@ -535,7 +572,7 @@
     </style>
 </head>
 <body class="bg-slate-900 text-slate-100 font-sans p-4 sm:p-8 flex items-center justify-center min-h-screen">
-    <div class="max-w-4xl mx-auto flex flex-col items-center">
+    <div class="max-w-4xl mx-auto flex flex-col items-center px-4 sm:px-8">
         <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500 mb-4">Circle Connection</h1>
 
         <!-- User ID display -->
@@ -551,6 +588,14 @@
             <!-- Player Turn Display -->
             <div class="mb-6">
                 <p id="turn-text" class="text-lg font-bold"></p>
+            </div>
+
+            <!-- Share Link Container -->
+            <div id="share-link-container" class="flex items-center gap-2 mb-6 hidden">
+                <input id="share-link-input" type="text" readonly class="bg-slate-700 text-slate-100 p-2 rounded-md w-64 overflow-hidden overflow-ellipsis whitespace-nowrap">
+                <button id="copy-link-button" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                    Copy Link
+                </button>
             </div>
             
             <!-- Game Board -->
