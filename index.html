@@ -1,0 +1,583 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Circle Connection</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, getDoc, setDoc, onSnapshot, updateDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        
+        // DO NOT EDIT - These global variables are provided by the canvas environment
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+        const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+        
+        // Firebase initialization and authentication
+        let app, db, auth;
+        let userId = null;
+        let isAuthReady = false;
+        
+        window.addEventListener('load', async () => {
+            if (Object.keys(firebaseConfig).length > 0) {
+                setLogLevel('debug');
+                app = initializeApp(firebaseConfig);
+                db = getFirestore(app);
+                auth = getAuth(app);
+        
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        console.log("User signed in with ID:", userId);
+                        isAuthReady = true;
+                        initGame();
+                    } else {
+                        userId = null;
+                        isAuthReady = true;
+                        console.log("No user signed in.");
+                        initGame();
+                    }
+                });
+        
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(auth, initialAuthToken);
+                        console.log("Signed in with custom token.");
+                    } else {
+                        await signInAnonymously(auth);
+                        console.log("Signed in anonymously.");
+                    }
+                } catch (error) {
+                    console.error("Firebase Auth Error:", error);
+                }
+            } else {
+                console.error("Firebase config is missing. Game cannot be played online.");
+            }
+        });
+        
+        // --- Game Logic ---
+        const rows = 10;
+        const playerColors = {
+            'player1': { line: 'pink', fill: 'bg-gray-400', name: '' },
+            'player2': { line: 'purple', fill: 'bg-gray-400', name: '' }
+        };
+        const gameId = `circle-connection-${appId}`;
+        const gameRef = () => doc(db, 'artifacts', appId, 'public', 'data', 'games', gameId);
+        
+        function initGame() {
+            if (!isAuthReady) {
+                console.log("Authentication not ready. Retrying initGame...");
+                setTimeout(initGame, 500);
+                return;
+            }
+            
+            // Listen for changes to the game state
+            onSnapshot(gameRef(), async (docSnap) => {
+                const gameContainer = document.getElementById('game-container');
+                const nameModal = document.getElementById('name-modal');
+        
+                if (docSnap.exists()) {
+                    const gameState = docSnap.data();
+                    
+                    // Assign players based on ID once two players have joined
+                    if (gameState.player1Id && gameState.player2Id && gameState.playerTurn === null) {
+                        let player1Name = gameState.player1Name || 'Player 1';
+                        let player2Name = gameState.player2Name || 'Player 2';
+                        let firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player1Id : gameState.player2Id;
+                        if (Math.random() < 0.5) {
+                            firstTurnId = (gameState.player1Id > gameState.player2Id) ? gameState.player2Id : gameState.player1Id;
+                        }
+                        
+                        await updateDoc(gameRef(), {
+                            playerTurn: (firstTurnId === gameState.player1Id) ? 'player1' : 'player2'
+                        });
+                        console.log("Initial turn assigned.");
+                    }
+        
+                    if (typeof gameState.circles === 'string') {
+                        gameState.circles = JSON.parse(gameState.circles);
+                    }
+                    renderGame(gameState);
+                } else {
+                    gameContainer.classList.add('hidden');
+                    nameModal.classList.remove('hidden');
+                }
+            });
+        }
+        
+        async function joinGame(name) {
+            const docSnap = await getDoc(gameRef());
+            let initialState = {};
+            if (docSnap.exists()) {
+                initialState = docSnap.data();
+                if (initialState.player1Id === userId || initialState.player2Id === userId) {
+                    // This user has already joined, just update their name
+                    if (initialState.player1Id === userId) {
+                        await updateDoc(gameRef(), { player1Name: name });
+                    } else if (initialState.player2Id === userId) {
+                        await updateDoc(gameRef(), { player2Name: name });
+                    }
+                } else if (!initialState.player1Id) {
+                    await updateDoc(gameRef(), { player1Id: userId, player1Name: name });
+                } else if (!initialState.player2Id) {
+                    await updateDoc(gameRef(), { player2Id: userId, player2Name: name });
+                } else {
+                    showMessage("The game is full. You are a spectator.", 'red');
+                    return;
+                }
+            } else {
+                // Initialize a new game
+                let circles = [];
+                let count = 0;
+                for (let i = 0; i < rows; i++) {
+                    const row = [];
+                    for (let j = 0; j <= i; j++) {
+                        row.push({
+                            filled: false,
+                            filledBy: null,
+                            id: `circle-${count++}`
+                        });
+                    }
+                    circles.push(row);
+                }
+        
+                const newGameState = {
+                    circles: JSON.stringify(circles),
+                    scores: { player1: 0, player2: 0 },
+                    playerTurn: null, // Set to null initially
+                    player1Id: userId,
+                    player2Id: null,
+                    player1Name: name,
+                    player2Name: null,
+                    lines: []
+                };
+                try {
+                    await setDoc(gameRef(), newGameState);
+                    console.log("New game initialized by:", name);
+                } catch (e) {
+                    console.error("Error setting initial game state:", e);
+                }
+            }
+            document.getElementById('name-modal').classList.add('hidden');
+            document.getElementById('game-container').classList.remove('hidden');
+        }
+        
+        document.getElementById('name-form').addEventListener('submit', (e) => {
+            e.preventDefault();
+            const nameInput = document.getElementById('name-input');
+            const name = nameInput.value.trim();
+            if (name) {
+                joinGame(name);
+            } else {
+                showMessage("Please enter your name.", 'red');
+            }
+        });
+        
+        async function handleCircleClick(circleId, rowIdx, colIdx) {
+            if (!userId) {
+                showMessage("Please wait for authentication to complete.", 'yellow');
+                return;
+            }
+        
+            const docSnap = await getDoc(gameRef());
+            if (!docSnap.exists()) return;
+        
+            const gameState = docSnap.data();
+            if (typeof gameState.circles === 'string') {
+                gameState.circles = JSON.parse(gameState.circles);
+            }
+            
+            // Determine my player role
+            let myPlayerRole = null;
+            if (gameState.player1Id === userId) {
+                myPlayerRole = 'player1';
+            } else if (gameState.player2Id === userId) {
+                myPlayerRole = 'player2';
+            } else {
+                showMessage("The game is full. You are a spectator.", 'red');
+                return;
+            }
+        
+            // Check if it's my turn
+            if (gameState.playerTurn !== myPlayerRole) {
+                showMessage(`It's not your turn! It's ${gameState.playerTurn === 'player1' ? (gameState.player1Name || 'Player 1') : (gameState.player2Name || 'Player 2')}'s turn.`, 'red');
+                return;
+            }
+        
+            // Check if the circle is already filled
+            const circle = gameState.circles[rowIdx][colIdx];
+            if (circle.filled) {
+                showMessage("This circle is already filled.", 'red');
+                return;
+            }
+            
+            // Update the circle's state
+            gameState.circles[rowIdx][colIdx].filled = true;
+            gameState.circles[rowIdx][colIdx].filledBy = myPlayerRole;
+        
+            // Check for completed lines
+            let newLines = checkLines(gameState.circles, gameState.lines);
+            
+            // Apply new lines and update scores
+            if (newLines.length > 0) {
+                newLines.forEach(line => {
+                    gameState.scores[myPlayerRole] += line.points;
+                    gameState.lines.push({ type: line.type, points: line.points, player: myPlayerRole });
+                });
+                showMessage(`Player ${myPlayerRole.slice(-1)} connected a line and got ${newLines[0].points} points! You get another turn.`, 'green');
+            } else {
+                // Change turn only if no line was connected
+                gameState.playerTurn = gameState.playerTurn === 'player1' ? 'player2' : 'player1';
+            }
+        
+            // Save the updated state to Firestore
+            try {
+                await setDoc(gameRef(), { ...gameState, circles: JSON.stringify(gameState.circles) });
+            } catch (e) {
+                console.error("Error updating game state:", e);
+            }
+        }
+        
+        function checkLines(circles, existingLines) {
+            const newLines = [];
+        
+            // Horizontal lines
+            for (let i = 0; i < circles.length; i++) {
+                const row = circles[i];
+                if (row.every(c => c.filled)) {
+                    if (!existingLines.some(l => l.type === `horizontal-${i}`)) {
+                        newLines.push({ type: `horizontal-${i}`, points: row.length });
+                    }
+                }
+            }
+        
+            // Diagonal Right lines
+            for (let i = 0; i < circles.length; i++) {
+                let diagonalRight = [];
+                for (let j = 0; j < circles[i].length; j++) {
+                    if (circles[i][j]) {
+                         let row = i;
+                         let col = j;
+                         let line = [];
+                         while(circles[row] && circles[row][col]) {
+                             line.push(circles[row][col]);
+                             row++;
+                             col++;
+                         }
+                         if (line.length > 1 && line.every(c => c.filled)) {
+                             const lineId = `diagR-${line[0].id}`;
+                             if (!existingLines.some(l => l.type === lineId)) {
+                                 newLines.push({ type: lineId, points: line.length });
+                             }
+                         }
+                    }
+                }
+            }
+        
+            // Diagonal Left lines
+            for (let i = 0; i < circles.length; i++) {
+                let diagonalLeft = [];
+                for (let j = 0; j < circles[i].length; j++) {
+                    if (circles[i][j]) {
+                         let row = i;
+                         let col = j;
+                         let line = [];
+                         while(circles[row] && circles[row][col]) {
+                             line.push(circles[row][col]);
+                             row++;
+                             col--;
+                         }
+                         if (line.length > 1 && line.every(c => c.filled)) {
+                             const lineId = `diagL-${line[0].id}`;
+                             if (!existingLines.some(l => l.type === lineId)) {
+                                 newLines.push({ type: lineId, points: line.length });
+                             }
+                         }
+                    }
+                }
+            }
+        
+            return newLines;
+        }
+        
+        // --- UI Rendering ---
+        function renderGame(gameState) {
+            const gameBoard = document.getElementById('game-board');
+            gameBoard.innerHTML = '';
+            
+            const circleDiameter = 30;
+            const gap = 15;
+            const horizontalSpacing = circleDiameter + gap;
+            const verticalSpacing = (circleDiameter + gap) * Math.sqrt(3) / 2;
+        
+            gameState.circles.forEach((row, rowIdx) => {
+                const rowLength = row.length;
+                const rowWidth = (rowLength - 1) * horizontalSpacing;
+                const rowXOffset = -rowWidth / 2;
+        
+                row.forEach((circle, colIdx) => {
+                    const circleDiv = document.createElement('div');
+                    circleDiv.id = circle.id;
+        
+                    const xPos = rowXOffset + (colIdx * horizontalSpacing);
+                    const yPos = rowIdx * verticalSpacing;
+        
+                    circleDiv.className = `absolute w-[30px] h-[30px] rounded-full border-2 border-slate-500 cursor-pointer transition-colors duration-200 ${circle.filled ? (circle.filledBy === 'player1' ? 'bg-pink-500' : 'bg-purple-500') : 'bg-gray-400'}`;
+                    circleDiv.style.left = `calc(50% + ${xPos}px)`;
+                    circleDiv.style.top = `${yPos}px`;
+        
+                    circleDiv.addEventListener('click', () => handleCircleClick(circle.id, rowIdx, colIdx));
+                    gameBoard.appendChild(circleDiv);
+                });
+            });
+            
+            // Render lines
+            gameState.lines.forEach(line => {
+                const lineDiv = document.createElement('div');
+                lineDiv.className = `absolute z-10`;
+                
+                const lineType = line.type.split('-')[0];
+                const playerColor = line.player === 'player1' ? playerColors.player1.line : playerColors.player2.line;
+        
+                if (lineType === 'horizontal') {
+                    const rowIdx = parseInt(line.type.split('-')[1]);
+                    const firstCircle = document.getElementById(gameState.circles[rowIdx][0].id);
+                    const lastCircle = document.getElementById(gameState.circles[rowIdx][gameState.circles[rowIdx].length - 1].id);
+                    
+                    const startRect = firstCircle.getBoundingClientRect();
+                    const endRect = lastCircle.getBoundingClientRect();
+                    const boardRect = gameBoard.getBoundingClientRect();
+        
+                    const startX = startRect.left + startRect.width / 2 - boardRect.left;
+                    const startY = startRect.top + startRect.height / 2 - boardRect.top;
+                    const endX = endRect.left + endRect.width / 2 - boardRect.left;
+                    
+                    const width = endX - startX;
+                    
+                    lineDiv.style.left = `${startX}px`;
+                    lineDiv.style.top = `${startY}px`;
+                    lineDiv.style.width = `${width}px`;
+                    lineDiv.style.height = `3px`;
+                    lineDiv.style.backgroundColor = playerColor;
+                    lineDiv.style.transformOrigin = 'left center';
+                } else if (lineType === 'diagR' || lineType === 'diagL') {
+                    const circleId = line.type.split('-')[1];
+                    const startCircle = document.getElementById(circleId);
+                    if (!startCircle) return;
+        
+                    let rowIdx = -1, colIdx = -1;
+                    outerLoop:
+                    for(let i=0; i<gameState.circles.length; i++) {
+                        for(let j = 0; j < gameState.circles[i].length; j++) {
+                            if (gameState.circles[i][j].id === circleId) {
+                                rowIdx = i;
+                                colIdx = j;
+                                break outerLoop;
+                            }
+                        }
+                    }
+        
+                    let endRow = rowIdx;
+                    let endCol = colIdx;
+                    while(gameState.circles[endRow] && gameState.circles[endRow][endCol]) {
+                        endRow++;
+                        if (lineType === 'diagR') endCol++;
+                        else endCol--;
+                    }
+                    endRow--;
+                    if (lineType === 'diagR') endCol--;
+                    else endCol++;
+        
+                    const endCircle = document.getElementById(gameState.circles[endRow][endCol].id);
+                    if (!endCircle) return;
+        
+                    const startRect = startCircle.getBoundingClientRect();
+                    const endRect = endCircle.getBoundingClientRect();
+                    const boardRect = gameBoard.getBoundingClientRect();
+        
+                    const startX = startRect.left + startRect.width / 2 - boardRect.left;
+                    const startY = startRect.top + startRect.height / 2 - boardRect.top;
+                    const endX = endRect.left + endRect.width / 2 - boardRect.left;
+                    const endY = endRect.top + endRect.height / 2 - boardRect.top;
+        
+                    const length = Math.sqrt(Math.pow(endX - startX, 2) + Math.pow(endY - startY, 2));
+                    const angle = Math.atan2(endY - startY, endX - startX) * 180 / Math.PI;
+        
+                    lineDiv.style.left = `${startX}px`;
+                    lineDiv.style.top = `${startY}px`;
+                    lineDiv.style.width = `${length}px`;
+                    lineDiv.style.height = `3px`;
+                    lineDiv.style.backgroundColor = playerColor;
+                    lineDiv.style.transformOrigin = 'left center';
+                    lineDiv.style.transform = `rotate(${angle}deg)`;
+                }
+                gameBoard.appendChild(lineDiv);
+            });
+            
+            // Update UI elements
+            const turnText = document.getElementById('turn-text');
+            const scoreP1 = document.getElementById('score-player1');
+            const scoreP2 = document.getElementById('score-player2');
+            const userIdDisplay = document.getElementById('user-id-display');
+            
+            userIdDisplay.textContent = `Your ID: ${userId}`;
+            
+            const player1Name = gameState.player1Name || 'Player 1';
+            const player2Name = gameState.player2Name || 'Player 2';
+            
+            playerColors.player1.name = player1Name;
+            playerColors.player2.name = player2Name;
+        
+            if (gameState.playerTurn) {
+                const myRole = (gameState.player1Id === userId) ? 'player1' : (gameState.player2Id === userId ? 'player2' : null);
+                if (gameState.playerTurn === myRole) {
+                    turnText.textContent = `It's your turn!`;
+                } else {
+                    const opponentName = (gameState.playerTurn === 'player1') ? player1Name : player2Name;
+                    turnText.textContent = `It's ${opponentName}'s turn.`;
+                }
+                turnText.className = `text-base sm:text-lg font-bold ${gameState.playerTurn === 'player1' ? 'text-pink-500' : 'text-purple-500'}`;
+            } else {
+                turnText.textContent = 'Waiting for another player...';
+                turnText.className = 'text-base sm:text-lg font-bold text-slate-400';
+            }
+        
+            scoreP1.textContent = `${player1Name}: ${gameState.scores.player1} points`;
+            scoreP2.textContent = `${player2Name}: ${gameState.scores.player2} points`;
+        }
+        
+        function showMessage(message, color) {
+            const messageDiv = document.getElementById('message-modal');
+            const messageText = document.getElementById('message-text');
+            messageText.textContent = message;
+            messageText.className = `text-${color}-500`;
+            messageDiv.classList.remove('hidden');
+            setTimeout(() => {
+                messageDiv.classList.add('hidden');
+            }, 3000);
+        }
+        
+        document.getElementById('close-message').addEventListener('click', () => {
+            document.getElementById('message-modal').classList.add('hidden');
+        });
+        
+        async function resetGame() {
+            if (!userId) {
+                showMessage("Please wait for authentication to complete.", 'yellow');
+                return;
+            }
+            const docSnap = await getDoc(gameRef());
+            if (docSnap.exists()) {
+                const gameState = docSnap.data();
+                if (gameState.player1Id !== userId) {
+                    showMessage("Only Player 1 can reset the game.", 'red');
+                    return;
+                }
+            }
+        
+            let circles = [];
+            let count = 0;
+            // The row generation has been inverted to create a triangle pointing up
+            for (let i = rows - 1; i >= 0; i--) {
+                const row = [];
+                for (let j = 0; j <= i; j++) {
+                    row.push({
+                        filled: false,
+                        filledBy: null,
+                        id: `circle-${count++}`
+                    });
+                }
+                circles.push(row);
+            }
+        
+            const newGameState = {
+                circles: JSON.stringify(circles),
+                scores: { player1: 0, player2: 0 },
+                playerTurn: null,
+                player1Id: userId,
+                player2Id: null,
+                player1Name: gameState.player1Name,
+                player2Name: null,
+                lines: []
+            };
+        
+            try {
+                await setDoc(gameRef(), newGameState);
+                console.log("Game reset by Player 1.");
+                showMessage("Game has been reset!", 'green');
+            } catch (e) {
+                console.error("Error resetting game state:", e);
+            }
+        }
+        
+        document.getElementById('reset-button').addEventListener('click', resetGame);
+        
+        </script>
+    <style>
+        .circle-container {
+            position: relative;
+            /* Adjust height to fit the inverted triangle */
+            height: 400px;
+            width: 400px;
+        }
+    </style>
+</head>
+<body class="bg-slate-900 text-slate-100 font-sans p-4 sm:p-8 flex items-center justify-center min-h-screen">
+    <div class="max-w-4xl mx-auto flex flex-col items-center">
+        <h1 class="text-3xl sm:text-4xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-pink-500 to-purple-500 mb-4">Circle Connection</h1>
+
+        <!-- User ID display -->
+        <p id="user-id-display" class="text-xs mb-4 text-slate-400 text-center break-all"></p>
+        
+        <div id="game-container" class="flex flex-col items-center">
+            <!-- Scoreboard -->
+            <div class="flex justify-around w-full mb-6 text-base sm:text-lg font-semibold">
+                <p id="score-player1" class="text-pink-500">Player 1: 0 points</p>
+                <p id="score-player2" class="text-purple-500">Player 2: 0 points</p>
+            </div>
+    
+            <!-- Player Turn Display -->
+            <div class="mb-6">
+                <p id="turn-text" class="text-lg font-bold"></p>
+            </div>
+            
+            <!-- Game Board -->
+            <div id="game-board" class="circle-container flex flex-col items-center">
+                <!-- Circles will be dynamically generated here -->
+            </div>
+    
+            <!-- Reset Button -->
+            <button id="reset-button" class="mt-8 bg-purple-500 text-white font-bold py-2 px-4 rounded-full hover:bg-purple-600 transition-colors">
+                Reset Game
+            </button>
+        </div>
+
+        <!-- Name Modal -->
+        <div id="name-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center">
+            <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
+                <h2 class="text-2xl font-bold mb-4">Enter Your Name</h2>
+                <form id="name-form" class="flex flex-col items-center">
+                    <input id="name-input" type="text" placeholder="Your Name" class="w-full p-2 rounded-md bg-slate-700 text-slate-100 placeholder-slate-400 mb-4 focus:outline-none focus:ring-2 focus:ring-pink-500">
+                    <button type="submit" class="w-full bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                        Join Game
+                    </button>
+                </form>
+            </div>
+        </div>
+
+        <!-- Message Modal -->
+        <div id="message-modal" class="fixed inset-0 bg-slate-900 bg-opacity-75 flex items-center justify-center hidden">
+            <div class="bg-slate-800 p-8 rounded-xl shadow-lg border-2 border-slate-700 max-w-sm w-full text-center">
+                <p id="message-text" class="text-xl font-semibold mb-4"></p>
+                <button id="close-message" class="bg-pink-500 text-white font-bold py-2 px-4 rounded-full hover:bg-pink-600 transition-colors">
+                    OK
+                </button>
+            </div>
+        </div>
+        
+    </div>
+</body>
+</html>
