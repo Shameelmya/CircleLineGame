@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Circle Connection</title>
+    <title>Circle Line Game</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <script type="module">
         import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
@@ -13,8 +13,17 @@
         
         // DO NOT EDIT - These global variables are provided by the canvas environment
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
-        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
         const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : '';
+        
+        // IMPORTANT: Paste your Firebase config object here for GitHub hosting!
+        const firebaseConfig = {
+            apiKey: "AIzaSyDC8lbHuH6sZla2JijW_HU7jcy-YfanUaw",
+            authDomain: "crcle-lne-gme.firebaseapp.com",
+            projectId: "crcle-lne-gme",
+            storageBucket: "crcle-lne-gme.firebasestorage.app",
+            messagingSenderId: "710733005551",
+            appId: "1:710733005551:web:3edd685a5622c6c4a0911a"
+        };
         
         // Firebase initialization and authentication
         let app, db, auth;
@@ -132,7 +141,7 @@
                 // Initialize a new game
                 let circles = [];
                 let count = 0;
-                for (let i = 0; i < rows; i++) {
+                for (let i = rows - 1; i >= 0; i--) {
                     const row = [];
                     for (let j = 0; j <= i; j++) {
                         row.push({
